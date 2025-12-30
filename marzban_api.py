@@ -12,13 +12,19 @@ class MarzbanAPI:
     async def login(self):
         """Авторизация в Marzban API"""
         async with aiohttp.ClientSession() as session:
+            # Используем FormData вместо JSON
+            data = aiohttp.FormData()
+            data.add_field('username', self.username)
+            data.add_field('password', self.password)
+            data.add_field('grant_type', 'password')
+            
             async with session.post(
-                f"{self.base_url}/auth/login",
-                json={"username": self.username, "password": self.password}
+                f"{self.base_url}/api/admin/token",
+                data=data
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    self.token = data.get("access_token")
+                    result = await response.json()
+                    self.token = result.get("access_token")
                     return True
                 return False
     
@@ -69,25 +75,25 @@ class MarzbanAPI:
             "expire": expire_days * 86400 if expire_days else None
         }
         
-        return await self._request("POST", "/user", json=payload)
+        return await self._request("POST", "/api/user", json=payload)
     
     async def get_user(self, username):
         """Получить информацию о пользователе"""
-        return await self._request("GET", f"/user/{username}")
+        return await self._request("GET", f"/api/user/{username}")
     
     async def get_user_config(self, username):
         """Получить конфигурацию пользователя"""
-        return await self._request("GET", f"/user/{username}/subscription")
+        return await self._request("GET", f"/api/user/{username}/subscription")
     
     async def delete_user(self, username):
         """Удалить пользователя"""
-        return await self._request("DELETE", f"/user/{username}")
+        return await self._request("DELETE", f"/api/user/{username}")
     
     async def get_users(self):
         """Получить список всех пользователей"""
-        return await self._request("GET", "/users")
+        return await self._request("GET", "/api/users")
     
     async def reset_user_data(self, username):
         """Сбросить статистику пользователя"""
-        return await self._request("POST", f"/user/{username}/reset")
+        return await self._request("POST", f"/api/user/{username}/reset")
 
