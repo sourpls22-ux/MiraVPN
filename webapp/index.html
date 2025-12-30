@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>MiraVPN</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Загрузка -->
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Загрузка...</p>
+        </div>
+
+        <!-- Главный экран для новых пользователей -->
+        <div id="welcome-screen" class="screen hidden">
+            <div class="header">
+                <h1>🔐 MiraVPN</h1>
+                <p class="subtitle">Быстрый и надежный VPN</p>
+            </div>
+            
+            <div class="tariff-card">
+                <h2>Базовый тариф</h2>
+                <div class="tariff-info">
+                    <div class="info-item">
+                        <span class="icon">📦</span>
+                        <span id="base-gb">200</span> ГБ трафика
+                    </div>
+                    <div class="info-item">
+                        <span class="icon">⏰</span>
+                        <span id="base-days">30</span> дней
+                    </div>
+                    <div class="info-item">
+                        <span class="icon">💰</span>
+                        <span id="base-price">249</span>₽
+                    </div>
+                </div>
+                <button id="buy-vpn-btn" class="btn btn-primary">Купить VPN</button>
+            </div>
+
+            <div class="info-section">
+                <h3>О тарифах</h3>
+                <div class="info-card">
+                    <p><strong>Дополнительный пакет:</strong> +<span id="extra-gb">100</span> ГБ за <span id="extra-price">99</span>₽</p>
+                    <p><strong>Бесплатный режим:</strong> 2 Мбит/с до конца месяца</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Экран для существующих пользователей -->
+        <div id="user-screen" class="screen hidden">
+            <div class="header">
+                <h1>🔐 MiraVPN</h1>
+                <p class="subtitle" id="username-display">user_123456789</p>
+            </div>
+
+            <!-- Статус -->
+            <div class="status-card">
+                <div class="status-header">
+                    <span id="status-icon">✅</span>
+                    <span id="status-text">Active</span>
+                </div>
+                <div class="status-info">
+                    <div class="mode-badge" id="mode-badge">🚀 Быстрый режим</div>
+                </div>
+            </div>
+
+            <!-- Использование трафика -->
+            <div class="usage-card">
+                <div class="usage-header">
+                    <span>📊 Использование трафика</span>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <div class="usage-text">
+                        <span id="used-gb">0</span> GB / <span id="limit-gb">200</span> GB
+                    </div>
+                </div>
+                <div class="expire-text">
+                    Срок действия: <span id="expire-date">-</span>
+                </div>
+            </div>
+
+            <!-- Действия -->
+            <div class="actions">
+                <button id="get-config-btn" class="btn btn-secondary">📥 Получить конфигурацию</button>
+                <button id="buy-extra-btn" class="btn btn-primary">💰 Продлить (+100 ГБ)</button>
+                <button id="free-mode-btn" class="btn btn-secondary">🐌 Бесплатный режим</button>
+            </div>
+        </div>
+
+        <!-- Модальное окно конфигурации -->
+        <div id="config-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>📥 Ваша конфигурация</h2>
+                    <button class="close-btn" id="close-config">×</button>
+                </div>
+                <div class="config-container">
+                    <textarea id="config-text" readonly></textarea>
+                    <button id="copy-config-btn" class="btn btn-primary">📋 Копировать</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Уведомления -->
+        <div id="notification" class="notification hidden"></div>
+    </div>
+
+    <script src="static/app.js"></script>
+</body>
+</html>
+

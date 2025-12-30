@@ -2,7 +2,7 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.fsm.storage.memory import MemoryStorage
 from config import (
     TELEGRAM_BOT_TOKEN, SERVER_IP,
@@ -84,6 +84,10 @@ async def cmd_start(message: types.Message):
             status = marzban_user.get("status", "unknown")
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🌐 Открыть Web App",
+                    web_app=WebAppInfo(url="https://app.miravpn.com")
+                )],
                 [InlineKeyboardButton(text="📊 Мой статус", callback_data="my_status")],
                 [InlineKeyboardButton(text="📥 Получить конфигурацию", callback_data="get_my_config")],
                 [InlineKeyboardButton(text="💰 Продлить (+100 ГБ)", callback_data="buy_extra")],
@@ -111,6 +115,10 @@ async def cmd_start(message: types.Message):
     else:
         # Новый пользователь - предлагаем купить VPN
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🌐 Открыть Web App",
+                web_app=WebAppInfo(url="https://app.miravpn.com")
+            )],
             [InlineKeyboardButton(
                 text=f"💰 Купить VPN ({BASE_TARIFF_PRICE}₽)",
                 callback_data="buy_vpn"
