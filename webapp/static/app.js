@@ -1,4 +1,4 @@
-const API_URL = 'https://app.miravpn.com/api';
+const API_URL = 'https://app.miravpn.com:8443/api';
 
 // Инициализация Telegram Web App
 const tg = window.Telegram.WebApp;

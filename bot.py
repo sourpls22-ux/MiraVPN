@@ -86,7 +86,7 @@ async def cmd_start(message: types.Message):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="🌐 Открыть Web App",
-                    web_app=WebAppInfo(url="https://app.miravpn.com")
+                    web_app=WebAppInfo(url="https://app.miravpn.com:8443")
                 )],
                 [InlineKeyboardButton(text="📊 Мой статус", callback_data="my_status")],
                 [InlineKeyboardButton(text="📥 Получить конфигурацию", callback_data="get_my_config")],
@@ -117,7 +117,7 @@ async def cmd_start(message: types.Message):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text="🌐 Открыть Web App",
-                web_app=WebAppInfo(url="https://app.miravpn.com")
+                web_app=WebAppInfo(url="https://app.miravpn.com:8443")
             )],
             [InlineKeyboardButton(
                 text=f"💰 Купить VPN ({BASE_TARIFF_PRICE}₽)",
