@@ -83,7 +83,11 @@ class MarzbanAPI:
     
     async def get_user_config(self, username):
         """Получить конфигурацию пользователя"""
-        return await self._request("GET", f"/api/user/{username}/subscription")
+        user = await self.get_user(username)
+        if user and user.get("links"):
+            # Возвращаем первую ссылку из массива links
+            return user["links"][0] if user["links"] else None
+        return None
     
     async def delete_user(self, username):
         """Удалить пользователя"""
