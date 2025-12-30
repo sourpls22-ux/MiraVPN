@@ -1,5 +1,6 @@
 import aiohttp
 import json
+from datetime import datetime, timedelta
 from config import MARZBAN_API_URL, MARZBAN_USERNAME, MARZBAN_PASSWORD
 
 class MarzbanAPI:
@@ -61,6 +62,12 @@ class MarzbanAPI:
     
     async def create_user(self, username, data_limit_gb=None, expire_days=None):
         """Создание пользователя с VLESS + Reality"""
+        # Вычисляем Unix timestamp для даты истечения
+        expire_timestamp = None
+        if expire_days:
+            expire_date = datetime.now() + timedelta(days=expire_days)
+            expire_timestamp = int(expire_date.timestamp())
+        
         payload = {
             "username": username,
             "proxies": {
@@ -72,7 +79,7 @@ class MarzbanAPI:
                 "vless": ["VLESS + Reality"]
             },
             "data_limit": data_limit_gb * 1024 * 1024 * 1024 if data_limit_gb else 0,
-            "expire": expire_days * 86400 if expire_days else None
+            "expire": expire_timestamp
         }
         
         return await self._request("POST", "/api/user", json=payload)
