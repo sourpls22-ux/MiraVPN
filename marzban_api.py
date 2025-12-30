@@ -100,4 +100,53 @@ class MarzbanAPI:
     async def reset_user_data(self, username):
         """Сбросить статистику пользователя"""
         return await self._request("POST", f"/api/user/{username}/reset")
+    
+    async def update_user_inbounds(self, username, inbounds_list):
+        """Обновить inbound пользователя"""
+        user = await self.get_user(username)
+        if not user:
+            return None
+        
+        payload = {
+            "username": username,
+            "proxies": user.get("proxies", {}),
+            "inbounds": {
+                "vless": inbounds_list
+            },
+            "data_limit": user.get("data_limit", 0),
+            "expire": user.get("expire", 0)
+        }
+        
+        return await self._request("PUT", f"/api/user/{username}", json=payload)
+    
+    async def add_traffic(self, username, additional_gb):
+        """Добавить трафик пользователю (в байтах)"""
+        user = await self.get_user(username)
+        if not user:
+            return None
+        
+        current_limit = user.get("data_limit", 0)
+        additional_bytes = additional_gb * 1024 * 1024 * 1024
+        new_limit = current_limit + additional_bytes
+        
+        payload = {
+            "username": username,
+            "proxies": user.get("proxies", {}),
+            "inbounds": user.get("inbounds", {}),
+            "data_limit": new_limit,
+            "expire": user.get("expire", 0)
+        }
+        
+        return await self._request("PUT", f"/api/user/{username}", json=payload)
+    
+    async def switch_to_free_mode(self, username):
+        """Переключить пользователя на бесплатный режим (медленный inbound + сброс лимита)"""
+        # Сначала сбрасываем статистику
+        reset_result = await self.reset_user_data(username)
+        if not reset_result:
+            return None
+        
+        # Переключаем на медленный inbound
+        result = await self.update_user_inbounds(username, ["VLESS + Reality Slow"])
+        return result
 

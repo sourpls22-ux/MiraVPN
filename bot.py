@@ -3,11 +3,19 @@ import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_ID, SERVER_IP
+from config import (
+    TELEGRAM_BOT_TOKEN, SERVER_IP,
+    BASE_TARIFF_GB, BASE_TARIFF_DAYS, BASE_TARIFF_PRICE,
+    EXTRA_GB_AMOUNT, EXTRA_GB_PRICE, FREE_MODE_SPEED_MBPS
+)
 from marzban_api import MarzbanAPI
+from database import (
+    init_db, get_user_by_telegram_id, create_user as db_create_user,
+    update_user_tariff, enable_free_mode, add_transaction
+)
+from scheduler import start_scheduler, set_bot_and_marzban
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -15,176 +23,72 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 marzban = MarzbanAPI()
 
-class CreateKeyStates(StatesGroup):
-    waiting_username = State()
-    waiting_limit = State()
-    waiting_expire = State()
-
-def is_admin(user_id: int) -> bool:
-    """Проверка, является ли пользователь администратором"""
-    return user_id == TELEGRAM_ADMIN_ID
-
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("❌ У вас нет доступа к этому боту.")
-        return
+async def create_vpn_key(message: types.Message, telegram_id: int):
+    """Создание VPN ключа с автоматической генерацией username"""
+    username = f"user_{telegram_id}"
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Создать ключ", callback_data="create_key")],
-        [InlineKeyboardButton(text="📋 Мои ключи", callback_data="list_keys")],
-        [InlineKeyboardButton(text="ℹ️ Помощь", callback_data="help")]
-    ])
+    await message.answer("⏳ Создаю ваш VPN ключ...")
     
-    await message.answer(
-        "🔐 *VPN Bot - Управление ключами*\n\n"
-        "Выберите действие:",
-        reply_markup=keyboard,
-        parse_mode="Markdown"
-    )
-
-@dp.callback_query(F.data == "create_key")
-async def create_key_callback(callback: types.CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет доступа", show_alert=True)
-        return
-    
-    await callback.message.edit_text(
-        "📝 *Создание нового ключа*\n\n"
-        "Отправьте имя пользователя для нового ключа.\n"
-        "Или отправьте /cancel для отмены.",
-        parse_mode="Markdown"
-    )
-    
-    await state.set_state(CreateKeyStates.waiting_username)
-
-@dp.message(Command("cancel"))
-async def cmd_cancel(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("❌ Отменено.")
-
-@dp.message(CreateKeyStates.waiting_username)
-async def process_username(message: types.Message, state: FSMContext):
-    username = message.text.strip()
-    
-    # Проверяем, что имя не пустое
-    if not username:
-        await message.answer("❌ Имя пользователя не может быть пустым. Попробуйте еще раз.")
-        return
-    
-    await state.update_data(username=username)
-    await message.answer(
-        f"✅ Имя пользователя: `{username}`\n\n"
-        "Отправьте лимит трафика в GB (или 0 для безлимита):\n"
-        "Или отправьте /skip для значения по умолчанию (100 GB)",
-        parse_mode="Markdown"
-    )
-    await state.set_state(CreateKeyStates.waiting_limit)
-
-@dp.message(Command("skip"))
-async def cmd_skip(message: types.Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state == CreateKeyStates.waiting_limit:
-        await state.update_data(data_limit=100)
-        await message.answer(
-            "✅ Лимит: 100 GB (по умолчанию)\n\n"
-            "Отправьте срок действия в днях (или 0 для бессрочного):\n"
-            "Или отправьте /skip для значения по умолчанию (30 дней)"
-        )
-        await state.set_state(CreateKeyStates.waiting_expire)
-    elif current_state == CreateKeyStates.waiting_expire:
-        await state.update_data(expire_days=30)
-        data = await state.get_data()
-        await create_user_final(message, data)
-        await state.clear()
-
-@dp.message(CreateKeyStates.waiting_limit)
-async def process_limit(message: types.Message, state: FSMContext):
-    try:
-        limit = float(message.text.strip())
-        if limit < 0:
-            raise ValueError
-        await state.update_data(data_limit=limit)
-        await message.answer(
-            f"✅ Лимит: {limit} GB\n\n"
-            "Отправьте срок действия в днях (или 0 для бессрочного):\n"
-            "Или отправьте /skip для значения по умолчанию (30 дней)"
-        )
-        await state.set_state(CreateKeyStates.waiting_expire)
-    except ValueError:
-        await message.answer("❌ Неверный формат. Отправьте число (например: 100 или 0)")
-
-@dp.message(CreateKeyStates.waiting_expire)
-async def process_expire(message: types.Message, state: FSMContext):
-    try:
-        expire = int(message.text.strip())
-        if expire < 0:
-            raise ValueError
-        await state.update_data(expire_days=expire)
-        data = await state.get_data()
-        await create_user_final(message, data)
-        await state.clear()
-    except ValueError:
-        await message.answer("❌ Неверный формат. Отправьте число дней (например: 30 или 0)")
-
-async def create_user_final(message: types.Message, data: dict):
-    username = data.get("username")
-    data_limit = data.get("data_limit", 100)
-    expire_days = data.get("expire_days", 30)
-    
-    await message.answer("⏳ Создаю ключ...")
-    
+    # Создаем пользователя в Marzban
     user_data = await marzban.create_user(
         username=username,
-        data_limit_gb=data_limit if data_limit > 0 else None,
-        expire_days=expire_days if expire_days > 0 else None
+        data_limit_gb=BASE_TARIFF_GB,
+        expire_days=BASE_TARIFF_DAYS
     )
     
     if user_data:
+        # Сохраняем в БД
+        await db_create_user(telegram_id, username, "base")
+        
         # Получаем конфигурацию
         config = await marzban.get_user_config(username)
         
         if config:
-            limit_text = f"{data_limit} GB" if data_limit > 0 else "Безлимит"
-            expire_text = f"{expire_days} дней" if expire_days > 0 else "Бессрочно"
-            
             await message.answer(
-                f"✅ *Ключ создан успешно!*\n\n"
+                f"✅ *VPN ключ создан успешно!*\n\n"
                 f"👤 Пользователь: `{username}`\n"
-                f"📊 Лимит: {limit_text}\n"
-                f"⏰ Срок действия: {expire_text}\n\n"
-                f"📥 *Конфигурация:*\n"
-                f"```\n{config}\n```",
+                f"📦 Лимит: {BASE_TARIFF_GB} GB\n"
+                f"⏰ Срок действия: {BASE_TARIFF_DAYS} дней\n\n"
+                f"📥 *Ваша конфигурация:*\n"
+                f"```\n{config}\n```\n\n"
+                f"💡 *Как использовать:*\n"
+                f"1. Скопируйте конфигурацию выше\n"
+                f"2. Вставьте в ваш VPN клиент (v2rayNG, Nekoray и т.д.)",
                 parse_mode="Markdown"
             )
         else:
             await message.answer(
                 f"✅ Пользователь создан: `{username}`\n"
-                f"Но не удалось получить конфигурацию. Попробуйте /config {username}",
+                f"Но не удалось получить конфигурацию. Попробуйте /start",
                 parse_mode="Markdown"
             )
     else:
-        await message.answer("❌ Ошибка при создании ключа. Возможно, пользователь уже существует.")
+        await message.answer(
+            "❌ Ошибка при создании ключа. Возможно, пользователь уже существует.\n"
+            "Попробуйте /start для проверки статуса."
+        )
 
-@dp.callback_query(F.data == "list_keys")
-async def list_keys_callback(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет доступа", show_alert=True)
-        return
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    telegram_id = message.from_user.id
+    user = await get_user_by_telegram_id(telegram_id)
     
-    await callback.answer("Загрузка...")
-    
-    users = await marzban.get_users()
-    
-    if users and users.get("users"):
-        text = "📋 *Список ключей:*\n\n"
-        keyboard_buttons = []
+    if user:
+        # Пользователь уже существует - показываем статус
+        username = user["username"]
+        marzban_user = await marzban.get_user(username)
         
-        for user in users["users"][:15]:  # Показываем первые 15
-            username = user.get("username", "N/A")
-            status = user.get("status", "unknown")
-            used = user.get("used_traffic", 0) / (1024**3)  # GB
-            limit = user.get("data_limit", 0) / (1024**3) if user.get("data_limit") else "∞"
+        if marzban_user:
+            used_gb = marzban_user.get("used_traffic", 0) / (1024**3)
+            limit_gb = marzban_user.get("data_limit", 0) / (1024**3) if marzban_user.get("data_limit") else "∞"
+            status = marzban_user.get("status", "unknown")
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📊 Мой статус", callback_data="my_status")],
+                [InlineKeyboardButton(text="📥 Получить конфигурацию", callback_data="get_my_config")],
+                [InlineKeyboardButton(text="💰 Продлить (+100 ГБ)", callback_data="buy_extra")],
+                [InlineKeyboardButton(text="ℹ️ Помощь", callback_data="help")]
+            ])
             
             status_emoji = {
                 "active": "✅",
@@ -193,221 +97,287 @@ async def list_keys_callback(callback: types.CallbackQuery):
                 "disabled": "❌"
             }.get(status, "❓")
             
-            text += f"{status_emoji} `{username}`\n"
-            text += f"   Статус: {status}\n"
-            text += f"   Использовано: {used:.2f} GB / {limit} GB\n\n"
-            
-            keyboard_buttons.append([
-                InlineKeyboardButton(
-                    text=f"📥 {username}",
-                    callback_data=f"get_config_{username}"
-                ),
-                InlineKeyboardButton(
-                    text=f"🗑️",
-                    callback_data=f"delete_user_{username}"
-                )
-            ])
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+            await message.answer(
+                f"🔐 *VPN Bot*\n\n"
+                f"{status_emoji} Статус: {status}\n"
+                f"📊 Использовано: {used_gb:.2f} GB / {limit_gb} GB\n\n"
+                f"Выберите действие:",
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+        else:
+            # Пользователь в БД, но не в Marzban - создаем заново
+            await create_vpn_key(message, telegram_id)
     else:
-        await callback.message.edit_text("📭 Ключей пока нет.")
+        # Новый пользователь - предлагаем купить VPN
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"💰 Купить VPN ({BASE_TARIFF_PRICE}₽)",
+                callback_data="buy_vpn"
+            )],
+            [InlineKeyboardButton(text="ℹ️ О тарифах", callback_data="tariffs_info")]
+        ])
+        
+        await message.answer(
+            f"🔐 *Добро пожаловать в VPN Bot!*\n\n"
+            f"*Базовый тариф:*\n"
+            f"📦 {BASE_TARIFF_GB} ГБ трафика\n"
+            f"⏰ Срок действия: {BASE_TARIFF_DAYS} дней\n"
+            f"💰 Цена: {BASE_TARIFF_PRICE}₽\n\n"
+            f"Протокол: *VLESS + Reality* для обхода блокировок в России.",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
 
-@dp.callback_query(F.data.startswith("get_config_"))
-async def get_config_callback(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет доступа", show_alert=True)
+@dp.callback_query(F.data == "my_status")
+async def my_status_callback(callback: types.CallbackQuery):
+    """Показать статус пользователя"""
+    telegram_id = callback.from_user.id
+    user = await get_user_by_telegram_id(telegram_id)
+    
+    if not user:
+        await callback.answer("❌ Пользователь не найден", show_alert=True)
         return
     
-    username = callback.data.replace("get_config_", "")
+    username = user["username"]
+    marzban_user = await marzban.get_user(username)
+    
+    if marzban_user:
+        used_gb = marzban_user.get("used_traffic", 0) / (1024**3)
+        limit_gb = marzban_user.get("data_limit", 0) / (1024**3) if marzban_user.get("data_limit") else "∞"
+        status = marzban_user.get("status", "unknown")
+        expire = marzban_user.get("expire", 0)
+        
+        status_emoji = {
+            "active": "✅",
+            "expired": "⏰",
+            "limited": "📊",
+            "disabled": "❌"
+        }.get(status, "❓")
+        
+        if expire:
+            expire_date = datetime.fromtimestamp(expire)
+            expire_text = expire_date.strftime("%d.%m.%Y %H:%M")
+        else:
+            expire_text = "Бессрочно"
+        
+        free_mode = user.get("free_mode_enabled", 0)
+        mode_text = "🐌 Бесплатный режим (2 Мбит/с)" if free_mode else "🚀 Быстрый режим"
+        
+        await callback.message.edit_text(
+            f"📊 *Ваш статус*\n\n"
+            f"{status_emoji} Статус: {status}\n"
+            f"{mode_text}\n"
+            f"📦 Использовано: {used_gb:.2f} GB / {limit_gb} GB\n"
+            f"⏰ Срок действия: {expire_text}\n\n"
+            f"👤 Пользователь: `{username}`",
+            parse_mode="Markdown"
+        )
+    else:
+        await callback.answer("❌ Не удалось получить данные", show_alert=True)
+
+@dp.callback_query(F.data == "get_my_config")
+async def get_my_config_callback(callback: types.CallbackQuery):
+    """Получить конфигурацию пользователя"""
+    telegram_id = callback.from_user.id
+    user = await get_user_by_telegram_id(telegram_id)
+    
+    if not user:
+        await callback.answer("❌ Пользователь не найден", show_alert=True)
+        return
+    
+    username = user["username"]
     config = await marzban.get_user_config(username)
     
     if config:
         await callback.message.answer(
-            f"📥 *Конфигурация для {username}:*\n\n"
-            f"```\n{config}\n```",
+            f"📥 *Ваша конфигурация:*\n\n"
+            f"```\n{config}\n```\n\n"
+            f"💡 Скопируйте и вставьте в ваш VPN клиент.",
             parse_mode="Markdown"
         )
         await callback.answer("✅ Конфигурация отправлена")
     else:
         await callback.answer("❌ Не удалось получить конфигурацию", show_alert=True)
 
-@dp.callback_query(F.data.startswith("delete_user_"))
-async def delete_user_callback(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет доступа", show_alert=True)
-        return
-    
-    username = callback.data.replace("delete_user_", "")
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_delete_{username}"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="list_keys")
-        ]
-    ])
-    
+@dp.callback_query(F.data == "tariffs_info")
+async def tariffs_info_callback(callback: types.CallbackQuery):
+    """Информация о тарифах"""
     await callback.message.edit_text(
-        f"⚠️ *Подтверждение удаления*\n\n"
-        f"Вы уверены, что хотите удалить ключ `{username}`?",
-        reply_markup=keyboard,
+        f"💰 *Тарифы VPN*\n\n"
+        f"*Базовый тариф:*\n"
+        f"📦 {BASE_TARIFF_GB} ГБ трафика\n"
+        f"⏰ Срок: {BASE_TARIFF_DAYS} дней\n"
+        f"💰 Цена: {BASE_TARIFF_PRICE}₽\n"
+        f"🚀 Скорость: без ограничений\n\n"
+        f"*Дополнительный пакет:*\n"
+        f"📦 +{EXTRA_GB_AMOUNT} ГБ\n"
+        f"💰 Цена: {EXTRA_GB_PRICE}₽\n\n"
+        f"*Бесплатный режим:*\n"
+        f"🐌 Скорость: {FREE_MODE_SPEED_MBPS} Мбит/с\n"
+        f"⏰ До конца месяца\n"
+        f"💰 Бесплатно\n\n"
+        f"Протокол: *VLESS + Reality*",
         parse_mode="Markdown"
     )
-
-@dp.callback_query(F.data.startswith("confirm_delete_"))
-async def confirm_delete_callback(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("❌ Нет доступа", show_alert=True)
-        return
-    
-    username = callback.data.replace("confirm_delete_", "")
-    result = await marzban.delete_user(username)
-    
-    if result:
-        await callback.message.edit_text(f"✅ Ключ `{username}` успешно удален.", parse_mode="Markdown")
-        await callback.answer("✅ Удалено")
-    else:
-        await callback.answer("❌ Ошибка при удалении", show_alert=True)
 
 @dp.callback_query(F.data == "help")
 async def help_callback(callback: types.CallbackQuery):
     help_text = (
         "ℹ️ *Помощь*\n\n"
         "*Команды:*\n"
-        "`/start` - Главное меню\n"
-        "`/create <username>` - Быстрое создание ключа\n"
-        "`/list` - Список всех ключей\n"
-        "`/config <username>` - Получить конфигурацию\n"
-        "`/delete <username>` - Удалить ключ\n"
-        "`/stats <username>` - Статистика пользователя\n"
-        "`/cancel` - Отменить текущую операцию\n\n"
+        "`/start` - Главное меню\n\n"
+        "*Возможности:*\n"
+        "• Покупка VPN ключа с автоматической генерацией\n"
+        "• Просмотр статуса и использования трафика\n"
+        "• Покупка дополнительных 100 ГБ\n"
+        "• Бесплатный режим при превышении лимита\n\n"
         "Все ключи создаются с протоколом *VLESS + Reality*\n"
         "для обхода блокировок в России."
     )
     await callback.message.edit_text(help_text, parse_mode="Markdown")
 
-@dp.message(Command("create"))
-async def cmd_create(message: types.Message):
-    if not is_admin(message.from_user.id):
+@dp.callback_query(F.data == "buy_vpn")
+async def buy_vpn_callback(callback: types.CallbackQuery):
+    """Обработчик покупки базового тарифа"""
+    telegram_id = callback.from_user.id
+    
+    # Проверяем, не существует ли уже пользователь
+    user = await get_user_by_telegram_id(telegram_id)
+    if user:
+        await callback.answer("✅ У вас уже есть VPN ключ! Используйте /start", show_alert=True)
         return
     
-    args = message.text.split()[1:]
-    if not args:
-        await message.answer("Использование: /create <username>")
+    await callback.answer("⏳ Создаю ваш VPN ключ...")
+    
+    # TODO: Здесь будет интеграция с платежной системой
+    # Пока создаем ключ сразу (для тестирования)
+    await create_vpn_key(callback.message, telegram_id)
+    
+    # Сохраняем транзакцию
+    await add_transaction(telegram_id, BASE_TARIFF_PRICE, "base_tariff")
+
+@dp.callback_query(F.data == "buy_extra")
+async def buy_extra_callback(callback: types.CallbackQuery):
+    """Обработчик покупки дополнительных 100 ГБ"""
+    telegram_id = callback.from_user.id
+    
+    await callback.answer("⏳ Обрабатываю запрос...")
+    
+    # Получаем пользователя из БД
+    user = await get_user_by_telegram_id(telegram_id)
+    if not user:
+        await callback.message.edit_text("❌ Пользователь не найден. Используйте /start для создания ключа.")
         return
     
-    username = args[0]
-    await message.answer("⏳ Создаю ключ с настройками по умолчанию...")
+    username = user["username"]
     
-    user_data = await marzban.create_user(username, data_limit_gb=100, expire_days=30)
+    # TODO: Здесь будет интеграция с платежной системой
+    # Пока добавляем трафик сразу (для тестирования)
+    result = await marzban.add_traffic(username, EXTRA_GB_AMOUNT)
     
-    if user_data:
-        config = await marzban.get_user_config(username)
-        if config:
-            await message.answer(
-                f"✅ *Ключ создан!*\n\n"
-                f"👤 Пользователь: `{username}`\n"
-                f"📊 Лимит: 100 GB\n"
-                f"⏰ Срок: 30 дней\n\n"
-                f"📥 *Конфигурация:*\n"
-                f"```\n{config}\n```",
+    if result:
+        # Сохраняем транзакцию
+        await add_transaction(telegram_id, EXTRA_GB_PRICE, "extra_gb")
+        
+        # Получаем обновленную информацию
+        updated_user = await marzban.get_user(username)
+        if updated_user:
+            limit_gb = updated_user.get("data_limit", 0) / (1024**3)
+            
+            await callback.message.edit_text(
+                f"✅ *Дополнительные {EXTRA_GB_AMOUNT} ГБ добавлены!*\n\n"
+                f"💰 Стоимость: {EXTRA_GB_PRICE}₽\n"
+                f"📦 Новый лимит: {limit_gb:.0f} GB\n\n"
+                f"⚠️ *Внимание:* Интеграция с платежной системой в разработке.\n"
+                f"Для реальной оплаты обратитесь к администратору.",
                 parse_mode="Markdown"
             )
         else:
-            await message.answer(f"✅ Пользователь создан: `{username}`", parse_mode="Markdown")
+            await callback.message.edit_text("✅ Трафик добавлен!")
     else:
-        await message.answer("❌ Ошибка при создании ключа. Возможно, пользователь уже существует.")
+        await callback.message.edit_text("❌ Ошибка при добавлении трафика.")
 
-@dp.message(Command("list"))
-async def cmd_list(message: types.Message):
-    if not is_admin(message.from_user.id):
+@dp.callback_query(F.data.startswith("buy_extra_"))
+async def buy_extra_from_notification_callback(callback: types.CallbackQuery):
+    """Обработчик покупки дополнительных 100 ГБ из уведомления о превышении лимита"""
+    telegram_id = int(callback.data.replace("buy_extra_", ""))
+    
+    # Проверяем, что это тот же пользователь
+    if callback.from_user.id != telegram_id:
+        await callback.answer("❌ Это не ваш запрос", show_alert=True)
         return
     
-    users = await marzban.get_users()
-    if users and users.get("users"):
-        text = "📋 *Список ключей:*\n\n"
-        for user in users["users"]:
-            username = user.get("username", "N/A")
-            status = user.get("status", "unknown")
-            text += f"👤 `{username}` - {status}\n"
-        await message.answer(text, parse_mode="Markdown")
-    else:
-        await message.answer("📭 Ключей нет.")
+    # Перенаправляем на основной обработчик
+    callback.data = "buy_extra"
+    await buy_extra_callback(callback)
 
-@dp.message(Command("delete"))
-async def cmd_delete(message: types.Message):
-    if not is_admin(message.from_user.id):
+@dp.callback_query(F.data.startswith("enable_free_"))
+async def enable_free_mode_callback(callback: types.CallbackQuery):
+    """Обработчик включения бесплатного режима"""
+    telegram_id = int(callback.data.replace("enable_free_", ""))
+    
+    # Проверяем, что это тот же пользователь
+    if callback.from_user.id != telegram_id:
+        await callback.answer("❌ Это не ваш запрос", show_alert=True)
         return
     
-    args = message.text.split()[1:]
-    if not args:
-        await message.answer("Использование: /delete <username>")
+    await callback.answer("⏳ Включаю бесплатный режим...")
+    
+    # Получаем пользователя из БД
+    user = await get_user_by_telegram_id(telegram_id)
+    if not user:
+        await callback.message.edit_text("❌ Пользователь не найден в базе данных.")
         return
     
-    username = args[0]
-    result = await marzban.delete_user(username)
+    username = user["username"]
+    
+    # Переключаем на бесплатный режим (медленный inbound + сброс лимита)
+    result = await marzban.switch_to_free_mode(username)
     
     if result:
-        await message.answer(f"✅ Ключ `{username}` удален.", parse_mode="Markdown")
-    else:
-        await message.answer("❌ Ошибка при удалении.")
-
-@dp.message(Command("config"))
-async def cmd_config(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return
-    
-    args = message.text.split()[1:]
-    if not args:
-        await message.answer("Использование: /config <username>")
-        return
-    
-    username = args[0]
-    config = await marzban.get_user_config(username)
-    
-    if config:
-        await message.answer(
-            f"📥 *Конфигурация для {username}:*\n\n"
-            f"```\n{config}\n```",
+        # Вычисляем дату до конца месяца
+        now = datetime.now()
+        if now.month == 12:
+            end_of_month = datetime(now.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_of_month = datetime(now.year, now.month + 1, 1) - timedelta(days=1)
+        
+        # Сохраняем в БД
+        await enable_free_mode(telegram_id, end_of_month)
+        await update_user_tariff(telegram_id, "free")
+        
+        # Получаем новую конфигурацию
+        config = await marzban.get_user_config(username)
+        
+        await callback.message.edit_text(
+            f"✅ *Бесплатный режим включен!*\n\n"
+            f"🐌 Скорость: {FREE_MODE_SPEED_MBPS} Мбит/с\n"
+            f"⏰ Действует до: {end_of_month.strftime('%d.%m.%Y')}\n\n"
+            f"📥 *Новая конфигурация (медленный режим):*\n"
+            f"```\n{config}\n```\n\n"
+            f"💡 *Важно:* Обновите конфигурацию в вашем VPN клиенте!",
             parse_mode="Markdown"
         )
     else:
-        await message.answer("❌ Не удалось получить конфигурацию.")
-
-@dp.message(Command("stats"))
-async def cmd_stats(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return
-    
-    args = message.text.split()[1:]
-    if not args:
-        await message.answer("Использование: /stats <username>")
-        return
-    
-    username = args[0]
-    user = await marzban.get_user(username)
-    
-    if user:
-        used = user.get("used_traffic", 0) / (1024**3)  # GB
-        limit = user.get("data_limit", 0) / (1024**3) if user.get("data_limit") else "∞"
-        status = user.get("status", "unknown")
-        expire = user.get("expire", 0)
-        
-        expire_text = "Бессрочно" if expire == 0 else f"до {expire}"
-        
-        await message.answer(
-            f"📊 *Статистика пользователя {username}:*\n\n"
-            f"Статус: {status}\n"
-            f"Использовано: {used:.2f} GB / {limit} GB\n"
-            f"Срок действия: {expire_text}",
-            parse_mode="Markdown"
+        await callback.message.edit_text(
+            "❌ Ошибка при переключении на бесплатный режим.\n"
+            "Обратитесь к администратору."
         )
-    else:
-        await message.answer("❌ Пользователь не найден.")
 
 async def main():
+    logging.info("Инициализация базы данных...")
+    await init_db()  # Создаем таблицы users и transactions
+    
+    # Инициализируем scheduler с ботом и Marzban API
+    set_bot_and_marzban(bot, marzban)
+    scheduler = start_scheduler()
+    
     logging.info("Бот запущен...")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        scheduler.shutdown()
 
 if __name__ == "__main__":
     asyncio.run(main())
